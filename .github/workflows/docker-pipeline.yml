@@ -23,6 +23,8 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Set up .env file
+        env:
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
         run: |
           echo "API_TYPE=azure" >> .env
           echo "GPT_MODEL=gpt-4o-mini" >> .env
@@ -30,7 +32,7 @@ jobs:
           echo "EMBEDDING_MODEL=text-embedding-3-small" >> .env
           echo "EMBEDDING_API_VERSION=2023-05-15" >> .env
           echo "ENDPOINT=https://ai4se-openai.openai.azure.com/" >> .env
-          echo "AZURE_OPENAI_API_KEY=${{ secrets.AZURE_OPENAI_API_KEY }}" >> .env
+          echo "AZURE_OPENAI_API_KEY=$AZURE_OPENAI_API_KEY" >> .env
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
