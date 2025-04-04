@@ -5,7 +5,6 @@ __pycache__/
 *.pyd
 *.ipynb_checkpoints/
 
-
 # IDE-specific files
 .vscode/
 .idea/
@@ -16,3 +15,4 @@ Thumbs.db
 
 # Docker-related files
 *.log
+.env
