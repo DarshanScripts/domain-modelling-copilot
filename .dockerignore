@@ -15,4 +15,3 @@ Thumbs.db
 
 # Docker-related files
 *.log
-.env
