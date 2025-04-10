@@ -1,1 +1,2 @@
-Domain Modelling Copilot
+# domain-modelling-copilot
+ 
