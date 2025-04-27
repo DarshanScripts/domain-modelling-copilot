@@ -18,10 +18,10 @@
         <!-- Header -->
         <header class="d-flex justify-content-between align-items-center bg-grey text-white p-3 rounded shadow">
             <div class="d-flex align-items-center">
-                <input type="text" class="form-control me-2" id="userName" placeholder="Enter Name">
-                <button class="btn btn-primary me-3" id="submitNameBtn">Submit</button>
+                <input type="text" class="form-control me-2" id="userName" placeholder="Enter Name" >
+                <button class="btn btn-outline-primary me-3" id="submitNameBtn">Submit</button>
             </div>            
-            <button class="btn btn-success">Search Queries</button>
+            <button class="btn btn-success w-75">Search Queries</button>
         </header>
 
         <!-- Main Content -->
@@ -44,13 +44,13 @@
                         </div>
 
                         <div class="d-flex justify-content-between align-items-center mt-3" id="actionButtons" style="visibility: hidden;">
-                            <button class="btn btn-outline-warning">Feedback</button>
-                            <button class="btn btn-outline-secondary">Extend</button>
-                            <button class="btn btn-outline-danger">Reduce</button>
+                            <button class="btn btn-outline-warning w-25">Feedback</button>
+                            <button class="btn btn-outline-secondary w-25">Extend</button>
+                            <button class="btn btn-outline-danger w-25">Reduce</button>
                         </div>
 
                         <div class="input-group mt-3">
-                            <input type="text" class="form-control" id="userInput" placeholder="Enter your message...">
+                            <textarea class="form-control" id="userInput" placeholder="Enter your message..." rows="2" style="resize: none;"></textarea>
                             <button class="btn btn-primary" id="sendButton">Send</button>
                         </div>
                     </div>
@@ -58,12 +58,18 @@
             </div>
 
             <!-- Response and UML -->
-            <div class="col-lg-8">
+            <div class="col-lg-8 mb-1 ">
                 <div class="card shadow-sm h-100">
                     <div class="card-body d-flex flex-column">
                         <!-- Response Area -->
-                        <div class="response-area border rounded p-3 mb-3 flex-grow-1">
-                            <p id="scenarioText"></p>
+                        <ul class="nav nav-tabs">
+                            <li class="nav-item">
+                                <div class="nav-link active" id="scenario-tab">Scenario Text</div>
+                            </li>
+                        </ul>
+                        <div class="response-area border rounded p-3 mb-3">
+                            <div id="scenarioLoading" class="loading-spinner d-none"></div>
+                            <p id="scenarioText" class="mb-0">Your detailed scenario will be displayed here.</p>
                         </div>
 
                         <!-- Tabs -->
@@ -80,9 +86,8 @@
                         <div class="tab-content mt-3">
                             <!-- PlantUML Content -->
                             <div class="tab-pane fade show active" id="plantuml-content">
-                                <pre id="plantumlText">
-                                    <!-- PlantUML diagram will be displayed here -->
-                                </pre>
+                                <div id="plantumlText" class="uml-section">
+                                </div>
                             </div>
 
                             <!-- Domain Model Content -->
@@ -91,12 +96,11 @@
                             </div>
                         </div>
 
-                        <!-- Action Buttons -->
-                        <div class="mt-3 d-flex justify-content-around">
+                        <!-- <div class="mt-1 d-flex justify-content-around">
                             <button class="btn btn-primary">Submit to Database</button>
                             <button class="btn btn-dark">Search Similar</button>
                             <button class="btn btn-success">Export</button>
-                        </div>
+                        </div> -->
                     </div>
                 </div>
             </div>
@@ -108,6 +112,7 @@
 
     <!-- Custom JS -->
     <script src="{{ url_for('static', filename='script.js') }}"></script>
+
 </body>
 
 </html>

@@ -1,39 +1,16 @@
-from flask import Flask, render_template, request, jsonify
-from openai import AzureOpenAI
-from dotenv import load_dotenv
-import os
+from flask import Flask, render_template, request, jsonify, session
+from openai_client import OpenAIClient  # Utility class
 from gpt2 import gpt_v2_interface
+import os
 
 app = Flask(__name__)
 app.secret_key = "supersecretkey"  # Required for session handling
 
-# Initialize the OpenAI client
-load_dotenv(override=True)
-client = AzureOpenAI(
-    api_version=os.getenv("GPT_API_VERSION"),
-    api_key=os.getenv("API_KEY"),
-    azure_endpoint=os.getenv("ENDPOINT"),
-)
+# Initialize the OpenAI client once
+OpenAIClient.initialize()
 
-# Function to get chatbot response from OpenAI API
-def chatbot_response(user_input):
-    try:
-        prompts = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": user_input},
-        ]
-
-        response = client.chat.completions.create(
-            model=os.getenv("GPT_MODEL"), messages=prompts
-        )
-
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        print(f"Error with OpenAI API: {e}")
-        return "Sorry, I couldn't process your request."
-
-# Initialize chat history as a list of dictionaries
 chat_history = []
+scenario = []  # Stores all scenarios generated during the chat session
 
 @app.route("/")
 def home():
@@ -41,22 +18,88 @@ def home():
     chat_history = []  # Reset chat history on page load
     return render_template("index.html")
 
+# Function to handle chat messages
 @app.route("/chat", methods=["POST"])
 def chat():
-    global chat_history
+    """Handle chat messages and classify them as 'general' or 'scenario'."""
+    global chat_history, scenario
     try:
-        # Get user message from the request
+        # Get user message
         user_message = request.json.get("message", "").strip()
         if not user_message:
             return jsonify({"error": "Message is required"}), 400
 
+        # Retrieve the user's name from the session
+        user_name = session.get("user_name")
+        if not user_name:
+            return jsonify({"error": "User name is not set. Please submit your name first."}), 400
+
         # Add the user's message to the chat history
         chat_history.append({"role": "user", "content": user_message})
 
-        # Prepare the prompts with the chat history
-        prompts = [{"role": "system", "content": "You are a helpful assistant."}] + chat_history
+        # Classify the input as "general" or "scenario"
+        classification = classify_input(user_message)
 
-        # Get response from chatbot
+        if classification == "general":
+            # Generate a general response
+            response = generate_general(user_name, chat_history)
+            bot_reply = response.json["response"]
+            chat_history.append({"role": "assistant", "content": bot_reply})
+            return response
+
+        elif classification == "scenario":
+            # Generate the detailed scenario
+            detailed_description = generate_scenario(user_message)
+
+            # Generate the summary from the detailed scenario
+            summary = generate_summary(detailed_description)
+
+            # Store the scenario in the global list
+            scenario.append(detailed_description)
+
+            # Add the scenario and summary to the chat history
+            chat_history.append({"role": "assistant", "content": summary})
+
+            # Return both the detailed scenario and the summary
+            return jsonify({"scenario": detailed_description, "summary": summary})
+
+        else:
+            # Invalid classification
+            return jsonify({"error": "Unable to classify the input. Please rephrase your query."}), 400
+
+    except Exception as e:
+        print(f"Error in /chat endpoint: {e}")
+        return jsonify({"error": "An error occurred"}), 500
+
+# Function to handle the name submission
+@app.route("/submit_name", methods=["POST"])
+def submit_name():
+    """Store the user's name in the session."""
+    try:
+        user_name = request.json.get("name", "").strip()
+        if not user_name:
+            return jsonify({"error": "Name is required"}), 400
+
+        # Store the name in the session
+        session["user_name"] = user_name
+        return jsonify({"message": "Name saved successfully!", "name": user_name})
+    except Exception as e:
+        print(f"Error storing name: {e}")
+        return jsonify({"error": "An error occurred while storing the name"}), 500
+
+# Function to generate a general response using GPT
+def generate_general(user_name, chat_history):
+    """Handle general input and return a response using GPT."""
+    try:
+        # Prepare the prompts with the chat history
+        prompts = [
+            {"role": "system", "content": f"You are a helpful assistant. The user's name is {user_name}."}
+        ] + chat_history
+
+        # Get the OpenAI client
+        client = OpenAIClient.get_client()
+
+        # Get response from GPT
         response = client.chat.completions.create(
             model=os.getenv("GPT_MODEL"), messages=prompts
         )
@@ -65,105 +108,43 @@ def chat():
         # Add the bot's response to the chat history
         chat_history.append({"role": "assistant", "content": bot_reply})
 
-        # Example of a formatted response
-        formatted_reply = f"""
-        <p><b>Response:</b></p>
-        <ul>
-            <li><i>{bot_reply}</i></li>
-        </ul>
-        """
-
-        return jsonify({"response": formatted_reply, "history": chat_history})
+        # Return the raw bot reply
+        return jsonify({"response": bot_reply, "history": chat_history})
     except Exception as e:
-        print(f"Error in /chat endpoint: {e}")
-        return jsonify({"error": "An error occurred"}), 500
+        print(f"Error genreating general response: {e}")
+        return jsonify({"error": "An error occurred while processing your request."}), 500
+    
 
-@app.route("/process_scenario", methods=["POST"])
-def process_scenario():
-    """Process the user-provided scenario and return the PlantUML, summary, and scenario text."""
+def generate_scenario(scenario_text=None):
+    """Generate a detailed scenario from the given user input."""
     try:
-        # Get the scenario text from the request
-        scenario_text = request.json.get("message", "").strip()
-        if not scenario_text:
-            return jsonify({"error": "Scenario text is required"}), 400
+        # If scenario_text is not provided, get it from the request (for direct API calls)
+        if scenario_text is None:
+            scenario_text = request.json.get("message", "").strip()
+            if not scenario_text:
+                return jsonify({"error": "Scenario text is required"}), 400
 
-        # Check if the input is sufficient for generating a scenario
-        if len(scenario_text.split()) < 5:  # Example condition: input has fewer than 5 words
-            # Return a normal chatbot response
-            bot_reply = chatbot_response(scenario_text)
-            return jsonify({"response": bot_reply, "history": []})
-
-        # Call gpt_v2_interface to process the scenario and generate PlantUML
-        plant_uml = gpt_v2_interface(scenario_text, client)
-
-        # Generate a detailed scenario description from the PlantUML
+        # Use LLM to generate a detailed scenario description
         prompts = [
-            {"role": "system", "content": "You are an expert in converting UML diagrams into natural language scenarios."},
-            {"role": "user", "content": f"Convert the following PlantUML diagram into a detailed scenario:\n\n{plant_uml}"}
+            {"role": "system", "content": "You are an expert in converting user inputs into detailed scenarios. Only respond with the detailed scenario, do not add anything else like title, conclusion, etc."},
+            {"role": "user", "content": f"Generate a detailed scenario for the following input:\n\n{scenario_text}"}
         ]
+
+        # Get the OpenAI client
+        client = OpenAIClient.get_client()
+
+        # Call the GPT model to generate the detailed scenario
         response = client.chat.completions.create(
             model=os.getenv("GPT_MODEL"),
             messages=prompts
         )
         detailed_description = response.choices[0].message.content.strip()
 
-        # Generate a summary from the detailed description
-        summary_prompt = [
-            {"role": "system", "content": "You are an expert in summarizing text."},
-            {"role": "user", "content": f"Summarize the following scenario in one or two sentences:\n\n{detailed_description}"}
-        ]
-        summary_response = client.chat.completions.create(
-            model=os.getenv("GPT_MODEL"),
-            messages=summary_prompt
-        )
-        summary = summary_response.choices[0].message.content.strip()
-
-        # Return the PlantUML, summary, and detailed scenario
-        return jsonify({"plantuml": plant_uml, "summary": summary, "scenario": detailed_description})
-    except Exception as e:
-        print(f"Error processing scenario: {e}")
-        return jsonify({"error": "An error occurred while processing the scenario"}), 500
-
-@app.route("/generate_scenario", methods=["POST"])
-def generate_scenario():
-    """Generate a scenario text from the given PlantUML diagram."""
-    try:
-        # Get the PlantUML text from the request
-        plantuml_text = request.json.get("plantuml", "").strip()
-        if not plantuml_text:
-            return jsonify({"error": "PlantUML text is required"}), 400
-
-        # Use GPT to generate a scenario from the PlantUML
-        prompts = [
-            {"role": "system", "content": "You are an expert in converting UML diagrams into natural language scenarios."},
-            {"role": "user", "content": f"Convert the following PlantUML diagram into a detailed scenario:\n\n{plantuml_text}"}
-        ]
-
-        # Call the GPT model
-        response = client.chat.completions.create(
-            model=os.getenv("GPT_MODEL"),
-            messages=prompts
-        )
-
-        # Extract the generated scenario
-        detailed_description = response.choices[0].message.content.strip()
-
-        # Generate a summary from the detailed description
-        summary_prompt = [
-            {"role": "system", "content": "You are an expert in summarizing text."},
-            {"role": "user", "content": f"Summarize the following scenario in one or two sentences:\n\n{detailed_description}"}
-        ]
-        summary_response = client.chat.completions.create(
-            model=os.getenv("GPT_MODEL"),
-            messages=summary_prompt
-        )
-        summary = summary_response.choices[0].message.content.strip()
-
-        # Return both the summary and the detailed description
-        return jsonify({"summary": summary, "detailed_description": detailed_description})
+        # Return the detailed scenario
+        return detailed_description
     except Exception as e:
         print(f"Error generating scenario: {e}")
-        return jsonify({"error": "An error occurred while generating the scenario"}), 500
+        return "An error occurred while generating the scenario."
 
 @app.route("/generate_uml", methods=["POST"])
 def generate_uml():
@@ -174,6 +155,9 @@ def generate_uml():
         if not scenario_text:
             return jsonify({"error": "Scenario text is required"}), 400
 
+        # Get the OpenAI client
+        client = OpenAIClient.get_client()
+
         # Call gpt_v2_interface to process the scenario and generate PlantUML
         plant_uml = gpt_v2_interface(scenario_text, client)
 
@@ -182,6 +166,78 @@ def generate_uml():
     except Exception as e:
         print(f"Error generating UML: {e}")
         return jsonify({"error": "An error occurred while generating the UML"}), 500
+
+@app.route("/generate_summary", methods=["POST"])
+def generate_summary():
+    """Generate a summary from the given detailed scenario."""
+    try:
+        # Get the detailed scenario from the request
+        detailed_description = request.json.get("detailed_description", "").strip()
+        if not detailed_description:
+            return jsonify({"error": "Detailed description is required"}), 400
+
+        # Use GPT to generate a summary
+        summary = generate_summary(detailed_description)
+
+        # Return the summary
+        return jsonify({"summary": summary})
+    except Exception as e:
+        print(f"Error generating summary: {e}")
+        return jsonify({"error": "An error occurred while generating the summary"}), 500
+
+def generate_summary(detailed_description):
+    """Generate a summary from the given detailed scenario."""
+    try:
+        # Use GPT to generate a summary
+        prompts = [
+            {"role": "system", "content": "You are an expert in summarizing detailed scenarios into concise summaries. A summary should capture the essence of the scenario in one or two sentences."},
+            {"role": "user", "content": f"Summarize the following scenario in one or two sentences:\n\n{detailed_description}"}
+        ]
+
+        # Get the OpenAI client
+        client = OpenAIClient.get_client()
+
+        # Call the GPT model to generate the summary
+        response = client.chat.completions.create(
+            model=os.getenv("GPT_MODEL"),
+            messages=prompts
+        )
+        summary = response.choices[0].message.content.strip()
+
+        # Return the summary
+        return summary
+    except Exception as e:
+        print(f"Error generating summary: {e}")
+        return "An error occurred while generating the summary."
+
+def classify_input(user_message):
+    """Classify the user input as 'general' or 'scenario'."""
+    try:
+        # Get the OpenAI client
+        client = OpenAIClient.get_client()
+
+        # Prepare the classification prompt
+        prompts = [
+            {"role": "system", "content": "You are an expert assistant trained to classify user inputs. Response with one of the following: 'general' or 'scenario'."},
+            {"role": "user", "content": f"Classify the following input as either 'general' or 'scenario'.).\n\nInput: {user_message}"}
+        ]
+
+        # Get the classification response
+        response = client.chat.completions.create(
+            model=os.getenv("GPT_MODEL"),
+            messages=prompts
+        )
+        classification = response.choices[0].message.content.strip().lower()
+        return classification
+    except Exception as e:
+        print(f"Error classifying input: {e}")
+        return "general"  # Default to "general" in case of an error
+
+@app.route("/get_scenarios", methods=["GET"])
+def get_scenarios():
+    """Retrieve all stored scenarios."""
+    global scenario
+    return jsonify({"scenarios": scenario})
 
 if __name__ == "__main__":
     app.run(debug=True)
