@@ -17,3 +17,6 @@ Thumbs.db
 # Docker-related files
 *.log
 .env
+
+notes.txt
+temp.json
