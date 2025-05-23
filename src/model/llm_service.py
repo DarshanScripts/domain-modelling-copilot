@@ -1,6 +1,6 @@
 from src.model.openai_client import OpenAIClient
 from src.model.chat_history import ChatHistory
-from src.model.scenario import Scenario
+from src.model.domain_model_description import DomainModelDescription
 import os
 import json
 
@@ -8,69 +8,99 @@ class LLMService:
     """Service for language model operations."""
     
     def __init__(self):
-        """Initialize the LLM service with chat history and scenario objects."""
+        """Initialize the LLM service with chat history and domain model description objects."""
         self.chat_history = ChatHistory()
-        self.current_scenario = Scenario()
+        self.current_domain_model_description = DomainModelDescription()
         self.client = OpenAIClient.get_client()
     
-    def determine_input_type(self, chat_history):
+    def determine_input_type(self, chat_history_text):
         """
-        Determine if the input has enough information for domain model description."""
+        Determine if the input has enough information for domain model description or if it's an update to an existing one.
+        Also detects irrelevant/casual messages that don't require domain model changes.
+        """
+        
         try:
             functions = [
                 {
                     "name": "get_decision",
-                    "description": "Returns a decision about domain modeling potential with suggestions",
+                    "description": "Returns a decision about domain model generation and appropriate response",
                     "parameters": {
                         "type": "object",
+                        "required": ["decision", "is_update", "is_casual_comment", "suggestions"],
                         "properties": {
-                            "criteria": {
-                                "type": "object",
-                                "properties": {
-                                    "value": {
-                                        "type": "string",
-                                        "description": "The chat history being evaluated"
-                                    },
-                                    "condition": {
-                                        "type": "string",
-                                        "description": "The condition for domain modeling potential"
-                                    }
-                                },
-                                "required": ["condition", "value"]
-                            },
                             "decision": {
                                 "type": "boolean",
-                                "description": "True if there's enough information for domain modeling, false otherwise"
+                                "description": "True if there's enough information for a domain model, False otherwise"
+                            },
+                            "is_update": {
+                                "type": "boolean", 
+                                "description": "True if this is an update to an existing domain model rather than a first request"
+                            },
+                            "is_casual_comment": {
+                                "type": "boolean",
+                                "description": "True if this is just a casual comment (like 'wow', 'nice') that doesn't require updating the domain model"
                             },
                             "suggestions": {
                                 "type": "array",
                                 "items": {
-                                    "type": "string"
+                                    "type": "string",
+                                    "description": "A suggestion or response line"
                                 },
-                                "description": "Suggestions for improving domain model information"
+                                "description": "Array of strings that form the complete response to show the user"
                             }
-                        },
-                        "required": ["criteria", "decision", "suggestions"]
+                        }
                     }
                 }
             ]
 
-            system_prompt = """You are an expert domain modelling engineer according to E. Evans, Domain-driven design principles. 
-            Your job is to decide if the chat history has enough information for a domain model.
-            
-            Guidelines:
-            - You need at minimum three entities and two relationships
-            - The user themselves cannot be an entity
-            - If provided with something like "I own a bicycle store in Hamburg. We sell E bikes and regular bikes," 
-              this contains enough information (Store, E-bike, Regular bike entities)
-            Analyze the ENTIRE chat history, not just the last message.
-            Use the function to return your analysis with a boolean decision and suggestions."""
+            system_prompt = """You are an expert domain modeling engineer specialized in UML and domain-driven design.
 
-            # Create messages array with system prompt
-            messages = [{"role": "system", "content": system_prompt}]
+YOUR TASK: Analyze chat history to determine if a domain model can be generated, updated, or if the message is unrelated to domain modeling.
+
+MESSAGE CLASSIFICATION:
+1. INITIAL DOMAIN MODEL REQUEST: When user first describes multiple entities (3+) and relationships (2+) in their domain.
+   - Example: "I want to open a store with products, customers, and employees. Customers buy products and employees sell them."
+
+2. DOMAIN MODEL UPDATE: When user adds new entities or relationships to an existing model.
+   - Example: "Now I also want to add suppliers who provide products to the store."
+   - Look for phrases like "add", "also", "now include", "additionally"
+
+3. CASUAL COMMENT: Brief reactions that don't add domain information.
+   - Examples: "wow", "nice", "thank you", "looks good", "great", "awesome", "perfect"
+   - IMPORTANT: If a domain model exists and user sends ONLY praise/acknowledgment, classify as CASUAL
+
+4. QUESTION/CLARIFICATION: User asks about the domain model without adding new information.
+   - Example: "What does this relationship mean?" or "Can you explain this part?"
+
+5. OFF-TOPIC: Message unrelated to domain modeling.
+   - Example: "What's the weather today?"
+
+HOW TO DETERMINE IF A DOMAIN MODEL EXISTS:
+- Look for previous bot messages containing detailed entity descriptions
+- Look for phrases like "Here's the domain model" or "I've updated the domain model"
+
+RESPONSE GUIDELINES:
+- For CASUAL COMMENTS: Acknowledge without regenerating model. Use varied responses like:
+  "Glad you like it! Let me know if you want to add more entities or relationships."
+  "Thanks! I'm here if you need to make any changes to the model."
+
+- For DOMAIN MODEL UPDATES: Acknowledge changes and provide extension suggestions:
+  "Perfect! I've added the new entities and relationships to the model. You might also want to consider: 
+  You might also want to consider:
+   - Adding attributes like **capacity** and **licensePlate** to the Truck entity
+   - Creating a relationship between **Truck** and **DeliveryRoute** entities
+   - Specifying if certain **Products** can only be transported by specific truck types
+   
+- For INITIAL REQUESTS: Neutral response with helpful suggestions.
+
+IMPORTANT: Response should be in bullet points(3 max).
+"""
+          # IMPORTANT: Format all entity names with **bold** in your response and not more than 2-3 sentences and response should be in bullet points(3 max).
             
-            # Add chat history messages directly as an array
-            messages.extend(chat_history)
+            messages = [
+                {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
+                {"role": "user", "content": [{"type": "text", "text": chat_history_text}]}
+            ]
 
             response = self.client.chat.completions.create(
                 model=os.getenv("GPT_MODEL"),
@@ -79,28 +109,30 @@ class LLMService:
                 function_call={"name": "get_decision"}
             )
             
-            # Extract function call result
             function_call = response.choices[0].message.function_call
-
-            # Print in JSON format
-            function_call_dict = {
-                "name": function_call.name,
-                "arguments": json.loads(function_call.arguments) if hasattr(function_call, "arguments") else None
-            }
-
-            # Print the function call details
-            print(json.dumps(function_call_dict, indent=2))
             
             if function_call and function_call.name == "get_decision":
                 result = json.loads(function_call.arguments)
                 
-                # Return the result directly
+                # Ensure all required fields are present with sensible defaults
+                if "suggestions" not in result or not result["suggestions"]:
+                    if result.get("is_casual_comment", False):
+                        result["suggestions"] = ["I'm glad you like it! Let me know if you want to make any changes to the domain model."]
+                    elif result.get("is_update", False):
+                        result["suggestions"] = ["I've updated the domain model with your changes."]
+                    elif result.get("decision", False):
+                        result["suggestions"] = ["I've created a domain model based on your description."]
+                    else:
+                        result["suggestions"] = ["Please provide more details about the entities and relationships in your domain."]
+                
                 return result
                     
             # Fallback if function call doesn't work as expected
             return {
                 "decision": False, 
-                "suggestions": ["Consider adding more specific entities and relationships"]
+                "is_update": False,
+                "is_casual_comment": False,
+                "suggestions": ["I need more information about your domain to help you. Could you describe the main entities and how they relate to each other?"]
             }
                 
         except Exception as e:
@@ -108,33 +140,35 @@ class LLMService:
             # Fallback with default values
             return {
                 "decision": False,
-                "suggestions": ["Consider adding more specific entities and relationships"]
+                "is_update": False,
+                "is_casual_comment": False,
+                "suggestions": ["I encountered an issue while analyzing your input. Could you try describing your domain again with key entities and relationships?"]
             }
 
-    # Generate a domain model description based on user input
-    def generate_scenario(self, scenario_text):
-        """Generate a detailed scenario from the given user input."""
+    def generate_domain_model_description(self, chat_history_text):
+        """Generate a structured domain model description from the given chat history."""
         try:
             prompts = [
                 {
                     "role": "system",
-                    "content": (
-                        "You are a domain modeling copilot. Generate clear, structured natural language descriptions of domain models. Focus on classes, attributes, and relationships. Be concise and specific. "
-                        "Avoid lengthy narratives or stories. Format your response as a professional business analysis document with appropriate sections for key entities and their relationships."
-                    )
+                    "content": [{"type": "text", "text": 
+                        "You are a domain modeling expert. Your task is to generate a structured, precise description of a domain model in clear, natural language."
+                        "\n\nExample format: 'The following domain model describes the entities Salesperson, RepairPerson, Customer, and Bike. Salesperson, RepairPerson, and Customer are connected to the entity Bike through associations. The Salesperson is associated with the Bike entity with the description 'sells' and 1 Salesperson can sell many Bikes. The RepairPerson is associated with the Bike entity with the description 'repairs' and 1 RepairPerson can repair many Bikes. The Customer is associated with the Bike entity with the description 'buys' and 1 Customer can buy many Bikes."
+                        "IMPORTANT: Only describe entities and relationships explicitly mentioned by the user. Do not add any additional entities, relationships, or functionalities that were not explicitly stated. Stick strictly to what the user has described. Focus on clarifying the existing entities and relationships without elaboration beyond the user's input."
+                    }]
                 },
-                {"role": "user", "content": f"Generate a domain model description for: {scenario_text}"}
+                {"role": "user", "content": [{"type": "text", "text": f"Generate a domain model description for the following conversation: \n\n{chat_history_text}"}]}
             ]
 
             response = self.client.chat.completions.create(
                 model=os.getenv("GPT_MODEL"), messages=prompts
             )
-            generated_scenario = response.choices[0].message.content.strip()
-            self.current_scenario.set_text(generated_scenario)
-            return generated_scenario
+            generated_domain_model_description = response.choices[0].message.content.strip()
+            self.current_domain_model_description.set_text(generated_domain_model_description)
+            return generated_domain_model_description
         except Exception as e:
-            print(f"Error generating scenario: {e}")
-            return "An error occurred while generating the scenario."
+            print(f"Error generating domain model description: {e}")
+            return "An error occurred while generating the domain model description."
     
     # Add helper methods to manage chat history
     def add_to_chat_history(self, role, content):
@@ -149,6 +183,6 @@ class LLMService:
         """Clear the chat history."""
         self.chat_history.clear()
         
-    def get_current_scenario(self):
-        """Get the current scenario."""
-        return self.current_scenario.get_text()
+    def get_current_domain_model_description(self):
+        """Get the current domain model description."""
+        return self.current_domain_model_description.get_text()
